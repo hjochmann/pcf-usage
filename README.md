@@ -16,6 +16,25 @@ $ ./pcfusage.sh dev
 
 In the _samples_ folder of this repo you can find an example output.
 
+### Create tackle import
+
+The script can creat a konveyor tackle import file (https://github.com/konveyor/tackle) from the collected data. 
+```bash
+Usage: pcfusage <PREFIX> <CMD>[ALL|APPS|SRVS|TACKLE] <STAGE>[dev]
+  
+  where: CMD=ALL    - all foundation information
+         CMD=APPS   - Apps in CSV format - REQUIRED THE OUTPUT OF 'ALL' RUN
+         CMD=SRVS   - service bindings - REQUIRED THE OUTPUT OF 'ALL' RUN
+         CMD=TACKLE_APP - Apps in Tackle CSV format (https://www.konveyor.io/tackle) - REQUIRED THE OUTPUT OF 'ALL' RUN
+         CMD=TACKLE_ORG - Apps in Tackle CSV format, one CF organisation is treated as one application (https://www.konveyor.io/tackle) - REQUIRED THE OUTPUT OF 'ALL' RUN
+
+Examples:
+  pcfusage dev - defaults to ALL
+  pcfusage dev apps - creates apps csv file
+  pcfusage dev srvs - creates a file with the app bindings guids
+  pcfusage dev tackle - creates apps Tackle csv file, stage defaults to 'dev'
+ ```
+
 ### API usage
 Below is a list of current [CF API](https://apidocs.cloudfoundry.org/2.4.0/) used by the script. In some cases, we handle the paging for API calls that can return a large number of elements.
 
