@@ -1,20 +1,23 @@
-#!/bin/bash
+#!/usr/local/bin/bash
 PREFIX=dev
 
 #set -e
 
 usage_and_exit() {
   cat <<EOF
-Usage: pcfusage <PREFIX> <CMD>[ALL|APPS|SRVS] <CSV>[yes/NO]
+Usage: pcfusage <PREFIX> <CMD>[ALL|APPS|SRVS|TACKLE] <STAGE>[dev]
   
-  where: CMD=ALL  - all foundation information
-         CMD=APPS - Apps in CSV format - REQUIRED THE OUTPUT OF 'ALL' RUN
-         CMD=SRVS - service bindings - REQUIRED THE OUTPUT OF 'ALL' RUN
+  where: CMD=ALL    - all foundation information
+         CMD=APPS   - Apps in CSV format - REQUIRED THE OUTPUT OF 'ALL' RUN
+         CMD=SRVS   - service bindings - REQUIRED THE OUTPUT OF 'ALL' RUN
+         CMD=TACKLE_APP - Apps in Tackle CSV format (https://www.konveyor.io/tackle) - REQUIRED THE OUTPUT OF 'ALL' RUN
+         CMD=TACKLE_ORG - Apps in Tackle CSV format, one CF organisation is treated as one application (https://www.konveyor.io/tackle) - REQUIRED THE OUTPUT OF 'ALL' RUN
 
 Examples:
-  pcfusage dev - defaults to ALL and NO 
+  pcfusage dev - defaults to ALL
   pcfusage dev apps - creates apps csv file
   pcfusage dev srvs - creates a file with the app bindings guids
+  pcfusage dev tackle - creates apps Tackle csv file, stage defaults to 'dev'
 EOF
   exit 1
 }
@@ -239,6 +242,164 @@ echo "Done. Created file ${PREFIX}_apps_srv_binding.json"
 
 }
 
+###################
+# CREATE_TACKLE - create csv file for Tackle import
+###################
+create_tackle_app() {
+
+echo "Record Type 1,Application Name,Description,Comments,Business Service,Dependency,Dependency Direction,Tag Type 1,Tag 1,Tag Type 2,Tag 2,Tag Type 3,Tag 3,Tag Type 4,Tag 4,Tag Type 5,Tag 5,Tag Type 6,Tag 6,Tag Type 7,Tag 7,Tag Type 8,Tag 8,Tag Type 9,Tag 9,Tag Type 10,Tag 10,Tag Type 11,Tag 11,Tag Type 12,Tag 12,Tag Type 13,Tag 13,Tag Type 14,Tag 14,Tag Type 15,Tag 15,Tag Type 16,Tag 16,Tag Type 17,Tag 17,Tag Type 18,Tag 18,Tag Type 19,Tag 19,Tag Type 20,Tag 20" > tackle_apps_${PREFIX}_import.csv
+
+spaces_guids=$(jq -r ".[].spaces[]? | select(.name==\"${STAGE}\") | .space_guid" ${PREFIX}_foundation.json)
+#printf '%s\n' "${spaces_guids[@]}"
+#spaces_guids="7595fe1d-ba7e-47a6-a4e3-e5539d58a7c6"
+
+total_spaces=$(echo "${spaces_guids[@]}" | wc -l)
+
+i=0
+while read -r line_space; do
+  echo "******* get appguids for space_guid ${line_space}"
+  org_id=$(jq -r ".[].spaces[]? | select(.space_guid==\"${line_space}\") | .org" ${PREFIX}_foundation.json)
+  org=$(jq -r ".[].orgs[]? | select(.org_guid==\"${org_id}\") | .name" ${PREFIX}_foundation.json)
+  apps_guids=$(jq -r ".[].apps[]? | select(.space==\"${line_space}\") | .app_guid" ${PREFIX}_foundation.json)
+  
+  #printf '%s\n' "${apps_guids[@]}"
+  total_apps=$(echo "${apps_guids[@]}" | wc -l)
+
+  printf "\nGenerating non system apps information ...\n\n"
+  c=0
+  while read -r line; do
+    services=""
+    app_name=$(jq -r ".[].apps[]? | select(.app_guid==\"${line}\") | .name" ${PREFIX}_foundation.json)
+
+    service_ids=$(jq -r ".[].service_bindings[]? | select(.app_guid==\"${line}\") | .service_instance_guid" ${PREFIX}_foundation.json )  
+    d=0
+    if [[ "$service_ids" = *[!\ ]* ]]; then
+      while read -r line_service; do
+       instance_id=$(jq -r ".[].service_instances[]? | select(.service_instance_guid==\"${line_service}\") | .service_guid" ${PREFIX}_foundation.json)
+       #echo "instance_id: $instance_id, line_service: $line_service"
+       if [[ "$instance_id" = *[!\ ]* ]]; then
+         tag_name=$(jq -r ".[].service_instances[]? | select(.service_instance_guid==\"${line_service}\") | .name" ${PREFIX}_foundation.json)
+         tag_type=$(jq -r ".[].services[]? | select(.service_guid==\"${instance_id}\")  | .label" ${PREFIX}_foundation.json)
+       else
+         tag_name=$(jq -r ".[].user_provided_service_instances[]? | select(.service_instance_guid==\"${line_service}\") | .name" ${PREFIX}_foundation.json)
+         tag_type="user_provided"
+       fi
+       services="${services} ${tag_type}:${tag_name}"
+       #echo ${tag_name} $(grep -q "${tag_name}" tackle_apps_${PREFIX}_import.csv;echo $?)
+      if [[ $(grep -q "1,S:${tag_name}," tackle_apps_${PREFIX}_import.csv;echo $?) -eq 1 ]] ; then
+        echo "1,S:${tag_name},,,,,,application,${org},app type,service,service,${tag_type}" >> tackle_apps_${PREFIX}_import.csv
+      fi 
+      echo "2,A:${app_name},,,,S:${tag_name},northbound" >> tackle_apps_${PREFIX}_import.csv
+
+      d=$((d + 1))
+     done <<< "$service_ids"
+    fi
+    #echo "1,A:${app_name},,Services:${services},,,,application,${org},app type,app" >> tackle_apps_${PREFIX}_import.csv
+    echo "1,A:${app_name},,,,,,application,${org},app type,app" >> tackle_apps_${PREFIX}_import.csv
+    c=$((c + 1))
+    echo -ne "Apps read so far ${c} of ${total_apps}\r"
+  done <<< "$apps_guids"
+  printf "\nSearched for service bindings for ${c} apps.\n\n"
+  
+  i=$((i + 1))
+  echo "******* Spaces read so far ${i} of ${total_spaces}"
+done <<< "$spaces_guids"
+
+printf "\nDone. Created file tackle_${PREFIX}_import.csv\n"
+
+printf "\nCreate a 'service' tag and the following tags needs to be created manually before import:\n"
+jq -r ".[].services[]? | .label" ${PREFIX}_foundation.json
+echo "user_provided"
+
+printf "\nCreate a 'app type' tag type and the following tags needs to be created manually before import:\n"
+echo "app"
+echo "service"
+
+printf "\nCreate a 'application' tag type and the following tags needs to be created manually before import:\n"
+jq -r ".[].orgs[]? | .name" ${PREFIX}_foundation.json
+}
+
+###################
+# CREATE_TACKLE - create csv file for Tackle import
+###################
+create_tackle_org() {
+
+echo "Record Type 1,Application Name,Description,Comments,Business Service,Dependency,Dependency Direction,Tag Type 1,Tag 1,Tag Type 2,Tag 2,Tag Type 3,Tag 3,Tag Type 4,Tag 4,Tag Type 5,Tag 5,Tag Type 6,Tag 6,Tag Type 7,Tag 7,Tag Type 8,Tag 8,Tag Type 9,Tag 9,Tag Type 10,Tag 10,Tag Type 11,Tag 11,Tag Type 12,Tag 12,Tag Type 13,Tag 13,Tag Type 14,Tag 14,Tag Type 15,Tag 15,Tag Type 16,Tag 16,Tag Type 17,Tag 17,Tag Type 18,Tag 18,Tag Type 19,Tag 19,Tag Type 20,Tag 20" > tackle_org_${PREFIX}_import.csv
+
+org_guids=$(jq -r ".[].orgs[]? | .org_guid" ${PREFIX}_foundation.json)
+total_spaces=$(echo "${org_guids[@]}" | wc -l| tr -d '[:space:]')
+
+i=0
+while read -r line_org; do
+  echo "******* get appguids for org_guid ${line_org}"
+  space_id=$(jq -r ".[].spaces[]? | select(.org==\"${line_org}\" and .name==\"${STAGE}\") | .space_guid" ${PREFIX}_foundation.json)
+  org=$(jq -r ".[].orgs[]? | select(.org_guid==\"${line_org}\") | .name" ${PREFIX}_foundation.json)
+  apps_guids=$(jq -r ".[].apps[]? | select(.space==\"${space_id}\") | .app_guid" ${PREFIX}_foundation.json)
+  
+  #printf '%s\n' "${apps_guids[@]}"
+  total_apps=$(echo "${apps_guids[@]}" | wc -l| tr -d '[:space:]')
+
+  printf "\nGenerating non system apps information ...\n\n"
+  c=0
+  unset services
+  declare -A services
+  comment=""
+  while read -r line; do
+    app_name=$(jq -r ".[].apps[]? | select(.app_guid==\"${line}\") | .name" ${PREFIX}_foundation.json)
+    printf -v comment "${comment}#${app_name//[[:space:]]/}"
+
+    service_ids=$(jq -r ".[].service_bindings[]? | select(.app_guid==\"${line}\") | .service_instance_guid" ${PREFIX}_foundation.json )  
+    unset services_pod
+    declare -A services_pod
+
+    if [[ "$service_ids" = *[!\ ]* ]]; then
+      while read -r line_service; do
+        instance_id=$(jq -r ".[].service_instances[]? | select(.service_instance_guid==\"${line_service}\") | .service_guid" ${PREFIX}_foundation.json)
+        #echo "instance_id: $instance_id, line_service: $line_service"
+        if [[ "$instance_id" = *[!\ ]* ]]; then
+          service_name=$(jq -r ".[].service_instances[]? | select(.service_instance_guid==\"${line_service}\") | .name" ${PREFIX}_foundation.json)
+          service_type=$(jq -r ".[].services[]? | select(.service_guid==\"${instance_id}\")  | .label" ${PREFIX}_foundation.json)
+        else
+          service_name=$(jq -r ".[].user_provided_service_instances[]? | select(.service_instance_guid==\"${line_service}\") | .name" ${PREFIX}_foundation.json)
+          service_type="user_provided"
+        fi
+        services_pod[${service_type}]="${services_pod[${service_type}]} ${service_name//[[:space:]]/}"
+
+        d=$((d + 1))
+      done <<< "$service_ids"
+
+      for service_type in "${!services_pod[@]}"; do
+        # This adds the service names also to the comment.
+        # we skip it for now as the comment is limmeted to 250 characters
+        #printf -v comment "${comment};${service_type//[[:space:]]/}:${services_pod[$service_type]}"
+        services[${service_type}]="${services[${service_type}]} ${services_pod[$service_type]}"
+      done
+    fi
+
+    c=$((c + 1))
+    echo -ne "Apps read so far ${c} of ${total_apps}\r"
+  done <<< "$apps_guids"
+  printf "\nSearched for service bindings for ${c} apps.\n\n"
+
+  tags="pods,pods ${total_apps}"
+  for service_type in "${!services[@]}"; do
+    tags="${tags},${service_type},${service_type} "$(echo ${services[$service_type]}|wc -w|tr -d '[:space:]')
+  done
+
+  echo "Comment size: "$(echo ${comment}|wc -c|tr -d '[:space:]')
+  echo "1,${org},Description,${comment},,,,${tags}" >> tackle_org_${PREFIX}_import.csv
+
+  i=$((i + 1))
+  echo "******* Spaces read so far ${i} of ${total_spaces}"
+done <<< "$org_guids"
+
+printf "\nDone. Created file tackle_${PREFIX}_import.csv\n"
+
+printf "\nThe following 'Tag Types' needs to be created manually before import:\n"
+jq -r ".[].services[]? | .label" ${PREFIX}_foundation.json
+}
+
+
 ###############################################
 # COMBINE_FILES Combine all json files into prefix_foundation.json
 ###############################################
@@ -274,16 +435,28 @@ if ! jq_exists; then
     error_and_exit "jq command not found. Please install jq to support set-vm-type functionality (https://stedolan.github.io/jq/download/)"
 fi
 
+unset assoc
+if ! declare -A assoc ; then
+    printf "\n\nAssociative arrays not supported!\n"
+    echo "Bash version 4 is required!"
+    exit 1
+fi
+
 PREFIX=${1:-}
 CMD=${2:-ALL}
+STAGE=${3:-dev}
 
 CMD=$( tr '[:lower:]' '[:upper:]' <<< "$CMD" )
-echo "options: PREFIX: $PREFIX, CMD: $CMD"
+echo "options: PREFIX: $PREFIX, CMD: $CMD , STAGE: $STAGE"
 
 if [ "$CMD" == "SRVS" ]; then
   create_app_srv_bindings
 elif [ "$CMD" == "APPS" ]; then
     create_csv
+elif [ "$CMD" == "TACKLE_APP" ]; then
+    create_tackle_app
+elif [ "$CMD" == "TACKLE_ORG" ]; then
+    create_tackle_org
 elif [ "$CMD" == "ALL" ]; then
   # Created foundation file, needed for CSV step below
   create_orgs
